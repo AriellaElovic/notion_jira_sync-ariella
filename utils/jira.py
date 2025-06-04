@@ -34,7 +34,7 @@ def fetch_filtered_jira_issues():
         if not field:
             raise RuntimeError(f"Unsupported JIRA_ROLE: {role}")
         jql = (
-            f'project = CFM AND resolution = Unresolved AND created >= "2024-01-01" AND {field} = "{display_name}" '
+            f'project = CFM AND status != Resolved AND created >= "2024-01-01" AND {field} = "{display_name}" '
             'ORDER BY updated DESC'
         )
 
