@@ -14,6 +14,8 @@ NOTION_HEADERS = {
     "Content-Type": "application/json",
 }
 
+JIRA_DISPLAY_NAME = os.getenv("JIRA_DISPLAY_NAME")
+
 FIELD_MAP = {
     "Name": ("summary", "title"),
     "Ticket ID": ("key", "rich_text"),
@@ -42,6 +44,7 @@ FIELD_MAP = {
 def get_existing_ticket_ids():
     url = f"{NOTION_BASE_URL}/databases/{NOTION_DATABASE_ID}/query"
     ticket_ids = set()
+    page_map = {}
     has_more = True
     payload = {"page_size": 100}
     while has_more:
@@ -54,10 +57,24 @@ def get_existing_ticket_ids():
             if ticket_field:
                 text = ticket_field[0]["text"]["content"]
                 ticket_ids.add(text)
+                page_map[text] = result["id"]
         has_more = data.get("has_more", False)
         if has_more:
             payload["start_cursor"] = data["next_cursor"]
-    return ticket_ids
+    return ticket_ids, page_map
+
+def delete_orphaned_tickets(page_map, valid_ticket_ids, dry_run=False):
+    for ticket_id, page_id in page_map.items():
+        if ticket_id not in valid_ticket_ids:
+            logging.info(f"🗑 Removing orphaned ticket {ticket_id}")
+            if not dry_run:
+                res = requests.patch(
+                    f"{NOTION_BASE_URL}/pages/{page_id}",
+                    headers=NOTION_HEADERS,
+                    json={"archived": True}
+                )
+                if res.status_code != 200:
+                    logging.warning(f"⚠️ Failed to archive ticket {ticket_id}: {res.text}")
 
 def ensure_select_option_exists(field_name, option_name):
     url = f"{NOTION_BASE_URL}/databases/{NOTION_DATABASE_ID}"
@@ -127,19 +144,20 @@ def add_or_update_ticket(issue, existing_ids, dry_run=False):
         if formatted:
             props[notion_field] = formatted
 
+    props["Ticket ID"] = {
+        "rich_text": [{
+            "type": "text",
+            "text": {
+                "content": key,
+                "link": {"url": f"https://warbyparker.atlassian.net/browse/{key}"}
+            }
+        }]
+    }
+
     changes = {}
 
     if key not in existing_ids:
         props["Status"] = {"status": {"name": "Not started"}}
-        props["Ticket ID"] = {
-            "rich_text": [{
-                "type": "text",
-                "text": {
-                    "content": key,
-                    "link": {"url": f"https://warbyparker.atlassian.net/browse/{key}"}
-                }
-            }]
-        }
 
         if dry_run:
             logging.info(f"[DRY RUN] Would create ticket: {key}")
@@ -151,14 +169,7 @@ def add_or_update_ticket(issue, existing_ids, dry_run=False):
         }
 
         res = requests.post(f"{NOTION_BASE_URL}/pages", headers=NOTION_HEADERS, json=payload)
-
         if res.status_code != 200:
-            print(f"❌ Failed to create ticket {key} in Notion.")
-            print(f"Status code: {res.status_code}")
-            print(f"Response: {res.text}")
-            print("Payload:")
-            import json
-            print(json.dumps(payload, indent=2))
             raise Exception(f"Failed to create ticket {key} in Notion")
 
         logging.info(f"✅ Created ticket {key} in Notion")
